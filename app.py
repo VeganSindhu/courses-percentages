@@ -174,9 +174,16 @@ else:
 
     for sheet in xls.sheet_names:
         df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
+
+        # Set header row
         df_sheet.columns = df_sheet.iloc[0]
         df_sheet = df_sheet[1:]
+        
+        # Drop empty columns
         df_sheet = df_sheet.dropna(axis=1, how="all")
+        
+        # 🔥 FIX: make column names unique (critical for Streamlit)
+        df_sheet = make_columns_unique(df_sheet)
 
         division_col = next(
             (c for c in df_sheet.columns if "division" in str(c).lower() or "unit" in str(c).lower()),
@@ -232,3 +239,14 @@ else:
         file_name="pivot_summary.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+    def make_columns_unique(df):
+        cols = pd.Series(df.columns)
+        for dup in cols[cols.duplicated()].unique():
+            idxs = cols[cols == dup].index.tolist()
+            for i, idx in enumerate(idxs):
+                if i == 0:
+                    continue
+                cols[idx] = f"{dup}.{i}"
+        df.columns = cols
+        return df
+
