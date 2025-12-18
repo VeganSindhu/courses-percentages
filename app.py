@@ -29,10 +29,9 @@ def read_csv_smart(uploaded):
     enc = chardet.detect(raw[:20000])["encoding"] or "utf-8"
     text = raw.decode(enc, errors="replace")
     try:
-        df = pd.read_csv(StringIO(text), sep=None, engine="python")
+        return pd.read_csv(StringIO(text), sep=None, engine="python")
     except Exception:
-        df = pd.read_csv(StringIO(text))
-    return df
+        return pd.read_csv(StringIO(text))
 
 
 def df_to_excel_bytes(df, sheet_name="Sheet1"):
@@ -41,28 +40,14 @@ def df_to_excel_bytes(df, sheet_name="Sheet1"):
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     buffer.seek(0)
     return buffer.getvalue()
-def make_columns_unique(df):
-    """
-    Ensure all column names are unique (required for Streamlit / pyarrow).
-    Example: Name, Name → Name, Name.1
-    """
-    cols = pd.Series(df.columns)
 
-    for dup in cols[cols.duplicated()].unique():
-        idxs = cols[cols == dup].index.tolist()
-        for i, idx in enumerate(idxs):
-            if i == 0:
-                continue
-            cols[idx] = f"{dup}.{i}"
 
-    df.columns = cols
-    return df
 def normalize_columns(df):
     """
-    1. Convert all column names to string
-    2. Replace NaN/None headers
-    3. Strip spaces
-    4. Force uniqueness
+    Bulletproof column normalizer:
+    - Handles NaN / merged headers
+    - Strips spaces
+    - Forces uniqueness (required for pandas + streamlit)
     """
     df.columns = df.columns.map(lambda x: str(x).strip() if pd.notna(x) else "Unnamed")
 
@@ -70,34 +55,27 @@ def normalize_columns(df):
     for dup in cols[cols.duplicated()].unique():
         idxs = cols[cols == dup].index.tolist()
         for i, idx in enumerate(idxs):
-            if i == 0:
-                continue
-            cols[idx] = f"{dup}.{i}"
+            if i > 0:
+                cols[idx] = f"{dup}.{i}"
     df.columns = cols
-
     return df
-
 
 # --------------------------------------------------
 # CSV FLOW (PIVOT STYLE: 1 = PENDING)
 # --------------------------------------------------
 if fname.endswith(".csv"):
     df = read_csv_smart(uploaded_file)
-
-    df.columns = df.columns.astype(str).str.strip()
+    df = normalize_columns(df)
     df = df.dropna(axis=1, how="all")
 
-    # Detect employee name column
     possible_name_cols = ["Employee Name", "Name of the Official", "Name", "Employee"]
     name_col = next((c for c in df.columns if c in possible_name_cols), df.columns[0])
 
-    # Detect division column
     division_col = next(
         (c for c in df.columns if "division" in c.lower() or "unit" in c.lower()),
         None
     )
 
-    # Exclude non-course columns
     exclude = {name_col}
     if division_col:
         exclude.add(division_col)
@@ -112,7 +90,6 @@ if fname.endswith(".csv"):
         st.error("No course columns detected.")
         st.stop()
 
-    # Pending = cell == 1
     pending_mask = df[course_cols].applymap(
         lambda x: str(x).strip() == "1" if pd.notna(x) else False
     )
@@ -125,47 +102,34 @@ if fname.endswith(".csv"):
         pending = int(sub.values.sum())
         completed = total_slots - pending
         pct = round((completed / total_slots) * 100, 2) if total_slots else 0
-        return pct, pending, total_slots
+        return pct
 
-    # Overall / RMS TP metric
     if division_col:
         rms_idx = df[df[division_col].astype(str).str.contains("RMS TP", case=False, na=False)].index
-        pct, _, _ = completion_pct(rms_idx)
-        st.metric("RMS TP Completion %", f"{pct}%")
+        st.metric("RMS TP Completion %", f"{completion_pct(rms_idx)}%")
     else:
-        pct, _, _ = completion_pct(df.index)
-        st.metric("Overall Completion %", f"{pct}%")
+        st.metric("Overall Completion %", f"{completion_pct(df.index)}%")
 
     st.divider()
 
-    # --------------------------------------------------
-    # SEARCH EMPLOYEE
-    # --------------------------------------------------
     st.subheader("🔍 Search Employee")
-
-    names = sorted(df[name_col].astype(str).str.strip().unique())
+    names = sorted(df[name_col].astype(str).unique())
     query = st.text_input("Type at least 4 characters")
 
     chosen_name = None
-
     if len(query) >= 4:
         matches = [n for n in names if query.lower() in n.lower()]
         if matches:
             chosen_name = st.selectbox("Select employee", matches)
-        else:
-            st.info("No match found")
     else:
-        chosen_name = st.selectbox("Or select from full list", ["-- select --"] + names)
+        chosen_name = st.selectbox("Select employee", ["-- select --"] + names)
         if chosen_name == "-- select --":
             chosen_name = None
 
     if not chosen_name:
         st.stop()
 
-    # --------------------------------------------------
-    # EMPLOYEE RESULT
-    # --------------------------------------------------
-    emp_rows = df[df[name_col].astype(str).str.strip() == chosen_name]
+    emp_rows = df[df[name_col] == chosen_name]
     emp_pending = pending_mask.loc[emp_rows.index].any(axis=0)
     pending_courses = emp_pending[emp_pending].index.tolist()
 
@@ -173,11 +137,9 @@ if fname.endswith(".csv"):
     pct = round((completed / total_courses) * 100, 2)
 
     c1, c2 = st.columns([3, 1])
-
     with c1:
         st.markdown(f"### 👤 {chosen_name}")
-        st.metric("Completion %", f"{pct}%", f"{completed}/{total_courses} completed")
-
+        st.metric("Completion %", f"{pct}%")
         if pending_courses:
             st.dataframe(pd.DataFrame({"Pending Courses": pending_courses}))
         else:
@@ -193,7 +155,6 @@ if fname.endswith(".csv"):
             "Employee Name": [chosen_name] * len(pending_courses),
             "Pending Course": pending_courses
         })
-
         st.download_button(
             "📥 Download Pending Courses (Excel)",
             data=df_to_excel_bytes(pending_df, "Pending"),
@@ -209,45 +170,29 @@ else:
     combined_df = pd.DataFrame()
 
     for sheet in xls.sheet_names:
-        combined_df = make_columns_unique(combined_df)
-        combined_df.columns = combined_df.columns.astype(str).str.strip()
         df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
- 
-        
-        # Assume first row is header
+
         df_sheet.columns = df_sheet.iloc[0]
         df_sheet = df_sheet[1:]
-        
-        # Drop fully empty columns
         df_sheet = df_sheet.dropna(axis=1, how="all")
-        
-        # 🔥 CRITICAL: normalize headers completely
         df_sheet = normalize_columns(df_sheet)
-        
-        
-               
 
         division_col = next(
-            (c for c in df_sheet.columns if "division" in str(c).lower() or "unit" in str(c).lower()),
+            (c for c in df_sheet.columns if "division" in c.lower() or "unit" in c.lower()),
             None
         )
 
-        if division_col:
-            df_tp = df_sheet[df_sheet[division_col].astype(str).str.contains("RMS TP", case=False, na=False)]
-        else:
-            df_tp = pd.DataFrame()
+        if not division_col:
+            continue
 
+        df_tp = df_sheet[df_sheet[division_col].astype(str).str.contains("RMS TP", case=False, na=False)]
         if df_tp.empty:
             continue
 
+        df_tp = normalize_columns(df_tp)
         df_tp["Course Name"] = sheet
 
-        # Normalize employee column
-        name_col = next(
-            (c for c in df_tp.columns if "name" in str(c).lower()),
-            None
-        )
-
+        name_col = next((c for c in df_tp.columns if "name" in c.lower()), None)
         if name_col:
             df_tp = df_tp.rename(columns={name_col: "Employee Name"})
 
@@ -257,12 +202,11 @@ else:
         st.error("No RMS TP data found in Excel.")
         st.stop()
 
+    combined_df = normalize_columns(combined_df)
+
     st.success("RMS TP data extracted successfully")
     st.dataframe(combined_df)
 
-    # --------------------------------------------------
-    # PIVOT
-    # --------------------------------------------------
     pivot_df = combined_df.pivot_table(
         index="Employee Name",
         columns="Course Name",
@@ -281,8 +225,3 @@ else:
         file_name="pivot_summary.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-   
-
-
-
-
