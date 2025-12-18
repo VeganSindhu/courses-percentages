@@ -190,6 +190,8 @@ else:
     combined_df = pd.DataFrame()
 
     for sheet in xls.sheet_names:
+        combined_df = make_columns_unique(combined_df)
+        combined_df.columns = combined_df.columns.astype(str).str.strip()
         df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
 
         # Set header row
@@ -257,5 +259,6 @@ else:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
    
+
 
 
