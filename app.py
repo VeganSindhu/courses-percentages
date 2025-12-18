@@ -57,6 +57,25 @@ def make_columns_unique(df):
 
     df.columns = cols
     return df
+def normalize_columns(df):
+    """
+    1. Convert all column names to string
+    2. Replace NaN/None headers
+    3. Strip spaces
+    4. Force uniqueness
+    """
+    df.columns = df.columns.map(lambda x: str(x).strip() if pd.notna(x) else "Unnamed")
+
+    cols = pd.Series(df.columns)
+    for dup in cols[cols.duplicated()].unique():
+        idxs = cols[cols == dup].index.tolist()
+        for i, idx in enumerate(idxs):
+            if i == 0:
+                continue
+            cols[idx] = f"{dup}.{i}"
+    df.columns = cols
+
+    return df
 
 
 # --------------------------------------------------
@@ -193,16 +212,20 @@ else:
         combined_df = make_columns_unique(combined_df)
         combined_df.columns = combined_df.columns.astype(str).str.strip()
         df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
-
-        # Set header row
+ 
+        
+        # Assume first row is header
         df_sheet.columns = df_sheet.iloc[0]
         df_sheet = df_sheet[1:]
         
-        # Drop empty columns
+        # Drop fully empty columns
         df_sheet = df_sheet.dropna(axis=1, how="all")
         
-        # 🔥 FIX: make column names unique (critical for Streamlit)
-        df_sheet = make_columns_unique(df_sheet)
+        # 🔥 CRITICAL: normalize headers completely
+        df_sheet = normalize_columns(df_sheet)
+        
+        
+               
 
         division_col = next(
             (c for c in df_sheet.columns if "division" in str(c).lower() or "unit" in str(c).lower()),
@@ -259,6 +282,7 @@ else:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
    
+
 
 
 
