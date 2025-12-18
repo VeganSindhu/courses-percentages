@@ -41,6 +41,23 @@ def df_to_excel_bytes(df, sheet_name="Sheet1"):
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     buffer.seek(0)
     return buffer.getvalue()
+def make_columns_unique(df):
+    """
+    Ensure all column names are unique (required for Streamlit / pyarrow).
+    Example: Name, Name → Name, Name.1
+    """
+    cols = pd.Series(df.columns)
+
+    for dup in cols[cols.duplicated()].unique():
+        idxs = cols[cols == dup].index.tolist()
+        for i, idx in enumerate(idxs):
+            if i == 0:
+                continue
+            cols[idx] = f"{dup}.{i}"
+
+    df.columns = cols
+    return df
+
 
 # --------------------------------------------------
 # CSV FLOW (PIVOT STYLE: 1 = PENDING)
@@ -239,14 +256,6 @@ else:
         file_name="pivot_summary.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    def make_columns_unique(df):
-        cols = pd.Series(df.columns)
-        for dup in cols[cols.duplicated()].unique():
-            idxs = cols[cols == dup].index.tolist()
-            for i, idx in enumerate(idxs):
-                if i == 0:
-                    continue
-                cols[idx] = f"{dup}.{i}"
-        df.columns = cols
-        return df
+   
+
 
